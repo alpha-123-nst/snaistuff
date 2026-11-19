@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LLM Pipeline Explorer – Minimal UI</title>
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main>
+    <h1>LLM Pipeline Explorer</h1>
+    <p>Explore how text becomes tokens and points in 3‑D space.</p>
+
+    <!-- Section 1 – Tokenizer -->
+    <section>
+      <h2>1. Tokenizer</h2>
+      <label for="corpus">Sentences to learn words from</label>
+      <textarea id="corpus" rows="6">The cat sat on the mat.
+The dog sat on the rug.
+The cat saw the dog!
+A dog and a cat can be friends.
+Do you like the cat?
+I don't like the rain, but I like the sun.</textarea>
+      <button id="build-vocab-btn">Build vocabulary</button>
+
+      <div id="vocab-slider-box" style="display:none;">
+        <label for="vocab-slider">Words kept in vocabulary: <span id="vocab-slider-value"></span></label>
+        <input type="range" id="vocab-slider" min="1" style="width:100%;">
+        <p class="note">Drag left to shrink the vocabulary. Dropped words get split into smaller subword pieces.</p>
+      </div>
+      <div id="vocab-output"></div>
+
+      <label for="encode-input">Encode a sentence</label>
+      <textarea id="encode-input" rows="2">The dogs liked the sunny zebra.</textarea>
+      <button id="tokenize-btn">Tokenize</button>
+      <div id="token-output"></div>
+    </section>
+
+    <!-- Section 2 – Embeddings -->
+    <section>
+      <h2>2. Embeddings in 3D</h2>
+      <label for="sentences">Sentences (one per line)</label>
+      <textarea id="sentences" rows="8">The cat sat on the mat.
+A kitten rested on the rug.
+The bat sat on the mat.
+I love programming in Python.
+Coding in Python is my passion.
+Pythons are large snakes.
+The stock market crashed today.
+Share prices fell sharply.</textarea>
+      <button id="embed-btn">Embed and plot</button>
+      <div id="embed-status" class="message"></div>
+      <div id="plot"></div>
+      <div id="pairs-output"></div>
+
+      <h3>Try your own word or sentence</h3>
+      <input type="text" id="new-word" placeholder="e.g. puppy, or: My dog sleeps on the carpet.">
+      <button id="add-word-btn">Tokenize, embed &amp; add to plot</button>
+      <div id="new-word-output"></div>
+    </section>
+  </main>
+
+  <script>
+// ==================== Tokenizer ====================
+let vocab = null;
+let sortedWords = [];
+let wordCounts = {};
+let subwordPieces = [];
+const COMMON_ENDINGS = ["##s", "##es", "##ed", "##ing", "##er", "##ly", "##y"];
+function splitIntoWords(text){
+  let t=text.toLowerCase();
+  t=t.replace(/([.,!?'])/g," $1 ");
+  return t.split(/\s+/).filter(w=>w!="");
+}
+function buildVocabulary(){
+  const words=splitIntoWords(document.getElementById("corpus").value);
+  wordCounts={};
+  for(const w of words){wordCounts[w]=(wordCounts[w]||0)+1;}
+  sortedWords=Object.keys(wordCounts).sort((a,b)=>wordCounts[b]-wordCounts[a]);
+  const letters=[...new Set(words.join("").replace(/[^a-z]/g, ""))].sort();
+  subwordPieces=[...COMMON_ENDINGS,...letters,...letters.map(ch=>"##"+ch)];
+  const slider=document.getElementById("vocab-slider");
+  slider.max=sortedWords.length;
+  slider.value=sortedWords.length;
+  document.getElementById("vocab-slider-box").style.display="block";
+  applyVocabSize(sortedWords.length);
+}
+function applyVocabSize(n){
+  const kept=sortedWords.slice(0,n);
+  document.getElementById("vocab-slider-value").textContent=`${n} of ${sortedWords.length}`;
+  vocab={"[UNK]":0};
+  let rows="<tr><td>0</td><td>[UNK]</td><td>-</td></tr>";
+  kept.forEach(w=>{vocab[w]=Object.keys(vocab).length;rows+=`<tr><td>${vocab[w]}</td><td>${escapeHtml(w)}</td><td>${wordCounts[w]}</td></tr>`;});
+  subwordPieces.forEach(p=>{if(p in vocab) return; vocab[p]=Object.keys(vocab).length; rows+=`<tr><td>${vocab[p]}</td><td>${escapeHtml(p)}</td><td>subword</td></tr>`;});
+  document.getElementById("vocab-output").innerHTML=`<p class="stats">Vocabulary size: ${Object.keys(vocab).length} tokens (${kept.length} words + subword pieces + [UNK])</p><div class="table-box"><table>${rows}</table></div>`;
+}
+function splitIntoSubwords(word){
+  const pieces=[];let start=0;while(start<word.length){let found=null;for(let end=word.length;end>start;end--){let piece=word.slice(start,end);if(start>0) piece="##"+piece; if(piece in vocab){found=piece;break;}}if(found===null) return [{text:"[UNK]",id:0,unknown:true}];pieces.push({text:found,id:vocab[found],unknown:true});start+=found.replace("##","").length;}return pieces;}
+function encode(text){
+  const tokens=[];for(const word of splitIntoWords(text)){if(word in vocab){tokens.push({text:word,id:vocab[word]});}else{tokens.push(...splitIntoSubwords(word));}}
+  return tokens;
+}
+function colorForId(id){const hue=(id*47)%360;return `hsl(${hue},70%,85%)`;}
+function renderChips(tokens){let chips="";for(const t of tokens){chips+=`<div class="chip" style="background:${colorForId(t.id)}"><div class="text">${escapeHtml(t.text)}</div><div class="id">${t.id}</div></div>`;}return `<div class="chips">${chips}</div>`;}
+function escapeHtml(s){return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");}
+function tokenizeSentence(){if(vocab===null) buildVocabulary(); const text=document.getElementById("encode-input").value; const tokens=encode(text); const chips=renderChips(tokens); const hasUnknown=tokens.some(t=>t.unknown); const charCount=text.length; const ratio=tokens.length? (charCount/tokens.length).toFixed(2):"0"; document.getElementById("token-output").innerHTML=`${chips}${hasUnknown?'<p class="note">words not in the vocabulary are split into the longest known pieces (subwords). A word with no matching pieces becomes [UNK].</p>':''}<p class="stats"><span>Characters: ${charCount}</span> <span>Tokens: ${tokens.length}</span> <span>Characters per token: ${ratio}</span></p>`;}
+// ==================== Embeddings ====================
+function hashString(s){let h=0;for(let i=0;i<s.length;i++){h=(h*31+s.charCodeAt(i))>>>0;}return h;}
+function normalize(v){const len=Math.sqrt(v.reduce((sum,x)=>sum+x*x,0))||1;return v.map(x=>x/len);}
+function spellingVector(sentence){const s=sentence.toLowerCase();const v=new Array(64).fill(0);for(let i=0;i+3<=s.length;i++){const trigram=s.slice(i,i+3);v[hashString(trigram)%64]++;}return normalize(v);}
+function dot(a,b){let sum=0;for(let i=0;i<a.length;i++) sum+=a[i]*b[i];return sum;}
+function similarity(a,b){return dot(a,b)/(Math.sqrt(dot(a,a))*Math.sqrt(dot(b,b))||1);}
+function pcaTo3D(vectors){const n=vectors.length,d=vectors[0].length;const mean=new Array(d).fill(0);for(const v of vectors)for(let j=0;j<d;j++)mean[j]+=v[j]/n;const X=vectors.map(v=>v.map((x,j)=>x-mean[j])); const C=[];for(let a=0;a<d;a++){C.push(new Array(d).fill(0));for(let b=0;b<d;b++){for(let i=0;i<n;i++)C[a][b]+=X[i][a]*X[i][b];C[a][b]/=(n-1);}}const components=[];for(let k=0;k<3;k++){let v=normalize(Array.from({length:d},(_,j)=>Math.sin(j+1+k)));for(let iter=0;iter<50;iter++)v=normalize(C.map(row=>dot(row,v)));const lambda=dot(v,C.map(row=>dot(row,v)));components.push(v);for(let a=0;a<d;a++)for(let b=0;b<d;b++)C[a][b]-=lambda*v[a]*v[b];}return X.map(x=>components.map(c=>dot(x,c)));}
+function drawPlot(points,sentences){const trace={type:"scatter3d",mode:"markers+text",x:points.map(p=>p[0]),y:points.map(p=>p[1]),z:points.map(p=>p[2]),text:sentences.map(s=>s.length>18?s.slice(0,18)+"…":s),hovertext:sentences,hoverinfo:"text",textposition:"top center",marker:{size:sentences.map(s=>s===userText?11:6),color:sentences.map(s=>s===userText?"#f97316":"#2563eb")}};const layout={margin:{l:0,r:0,t:0,b:0},scene:{xaxis:{title:"PC1"},yaxis:{title:"PC2"},zaxis:{title:"PC3"}}};Plotly.newPlot("plot",[trace],layout);}
+function showClosestPairs(vectors,sentences){const pairs=[];for(let i=0;i<vectors.length;i++)for(let j=i+1;j<vectors.length;j++)pairs.push({a:sentences[i],b:sentences[j],score:similarity(vectors[i],vectors[j])});pairs.sort((p,q)=>q.score-p.score);let rows="";for(const p of pairs.slice(0,5)){rows+=`<tr><td>${escapeHtml(p.a)}</td><td>${escapeHtml(p.b)}</td><td>${p.score.toFixed(3)}</td></tr>`;}document.getElementById("pairs-output").innerHTML=`<h3>Closest pairs</h3><table><tr><th>Sentence A</th><th>Sentence B</th><th>Similarity</th></tr>${rows}</table>`;}
+let userText=null;
+async function embedAndPlot(){const status=document.getElementById("embed-status");status.textContent="";const sentences=document.getElementById("sentences").value.split("\n").map(s=>s.trim()).filter(s=>s!="");if(sentences.length<4){status.textContent="Please enter at least 4 sentences.";return;}const vectors=sentences.map(spellingVector);drawPlot(pcaTo3D(vectors),sentences);showClosestPairs(vectors,sentences);if(sentences.includes(userText))showUserWordDetails(vectors,sentences);}
+async function addUserWord(){const text=document.getElementById("new-word").value.trim();if(text==="")return; if(vocab===null) buildVocabulary(); document.getElementById("new-word-output").innerHTML=`<p class="stats">Step 1 — tokens and IDs:</p>${renderChips(encode(text))}<div id="new-word-vector"></div>`; const box=document.getElementById("sentences");const lines=box.value.split("\n").map(s=>s.trim());if(!lines.includes(text)) box.value=box.value.trimEnd()+"\n"+text; userText=text; await embedAndPlot();}
+function showUserWordDetails(vectors,sentences){const me=sentences.indexOf(userText);const v=vectors[me];const others=sentences.map((s,i)=>({s,score:similarity(v,vectors[i])})).filter((_,i)=>i!==me).sort((a,b)=>b.score-a.score).slice(0,3);let rows="";for(const o of others){rows+=`<tr><td>${escapeHtml(o.s)}</td><td>${o.score.toFixed(3)}</td></tr>`;}document.getElementById("new-word-vector").innerHTML=`<p class="stats">Step 2 — vector (first 8 of ${v.length} numbers):</p><code>[${v.slice(0,8).map(x=>x.toFixed(3)).join(", ")}, …]</code><p class="stats">Step 3 — it is the <span style="color:#f97316">orange point</span> in the plot. Closest sentences:</p><table><tr><th>Sentence</th><th>Similarity</th></tr>${rows}</table>`;}
+// ==================== Event wiring ====================
+document.getElementById("build-vocab-btn").addEventListener("click",buildVocabulary);
+document.getElementById("tokenize-btn").addEventListener("click",tokenizeSentence);
+document.getElementById("vocab-slider").addEventListener("input",function(){applyVocabSize(Number(this.value));if(document.getElementById("token-output").innerHTML!="") tokenizeSentence();});
+document.getElementById("embed-btn").addEventListener("click",embedAndPlot);
+document.getElementById("add-word-btn").addEventListener("click",addUserWord);
+document.getElementById("new-word").addEventListener("keydown",e=>{if(e.key==="Enter") addUserWord();});
+  </script>
+</body>
+</html>
